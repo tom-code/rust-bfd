@@ -1,0 +1,35 @@
+[package]
+name = "bfd"
+version = "0.1.0"
+edition = "2024"
+description = "BFD (Bidirectional Forwarding Detection, RFC 5880/5881) library for link state detection"
+license = "BSD-2-Clause"
+repository = "https://github.com/tom-code/rust-bfd"
+authors = ["rust-bfd contributors"]
+keywords = ["bfd", "networking", "routing", "link-detection"]
+categories = ["network-programming"]
+
+[lib]
+name = "bfd"
+path = "src/lib.rs"
+
+[[example]]
+name = "two_peers"
+path = "examples/two_peers.rs"
+
+[[example]]
+name = "single_peer"
+path = "examples/single_peer.rs"
+
+[dependencies]
+tokio = { version = "1", features = ["net", "time", "sync", "macros", "rt-multi-thread", "io-util", "signal"] }
+thiserror = "2"
+tracing = "0.1"
+socket2 = { version = "0.5", features = ["all"] }
+getrandom = "0.3"
+libc = "0.2"
+
+[dev-dependencies]
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
