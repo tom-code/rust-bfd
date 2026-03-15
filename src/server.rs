@@ -60,11 +60,11 @@ pub struct BfdConfig {
     pub required_min_rx_interval_us: u32,
     /// Number of missed packets before the session is declared down. Must be > 0.
     pub detect_mult: u8,
-    /// Default operating mode for peers added via [`BfdDaemon::add_peer`].
+    /// Operating mode for all peers. Set once at daemon startup.
     ///
-    /// Can be overridden per-peer with [`BfdDaemon::add_peer_with_mode`].
-    /// `MultiHop { max_hops: 0 }` is rejected at startup.
-    pub default_mode: BfdMode,
+    /// `MultiHop { max_hops: 0 }` is rejected at startup. To run both single-hop
+    /// and multi-hop sessions, start two separate [`BfdDaemon`] instances.
+    pub mode: BfdMode,
     /// Desired minimum echo TX interval in microseconds, or `None` to disable echo TX.
     ///
     /// When `Some(n)`, the daemon sends BFD echo packets at the negotiated rate (at least
@@ -96,7 +96,7 @@ impl Default for BfdConfig {
             desired_min_tx_interval_us: 1_000_000,
             required_min_rx_interval_us: 1_000_000,
             detect_mult: 3,
-            default_mode: BfdMode::SingleHop,
+            mode: BfdMode::SingleHop,
             desired_min_echo_tx_interval_us: None,
             required_min_echo_rx_interval_us: 0,
             echo_slow_timer_us: 1_000_000,
@@ -127,7 +127,6 @@ pub struct DaemonCounters {
 enum Command {
     AddPeer {
         addr: SocketAddr,
-        mode: Option<BfdMode>,
         reply: oneshot::Sender<Result<(), BfdError>>,
     },
     RemovePeer {
@@ -196,9 +195,13 @@ impl BfdDaemon {
         if config.required_min_rx_interval_us == 0 {
             return Err(BfdError::InvalidConfig("required_min_rx_interval_us must be non-zero"));
         }
-        if let BfdMode::MultiHop { max_hops } = config.default_mode
+        if let BfdMode::MultiHop { max_hops } = config.mode
             && max_hops == 0 {
                 return Err(BfdError::InvalidConfig("max_hops must be non-zero in MultiHop mode; use SingleHop for directly connected peers"));
+            }
+        if matches!(config.mode, BfdMode::MultiHop { .. })
+            && config.desired_min_echo_tx_interval_us.is_some() {
+                return Err(BfdError::InvalidConfig("echo mode is only supported for SingleHop (RFC 5881 §4); use a separate SingleHop daemon for echo"));
             }
         if config.desired_min_echo_tx_interval_us == Some(0) {
             return Err(BfdError::InvalidConfig("desired_min_echo_tx_interval_us must be non-zero if set"));
@@ -243,23 +246,13 @@ impl BfdDaemon {
         Ok(daemon)
     }
 
-    /// Add a peer using the daemon's `default_mode`.
+    /// Add a peer using the daemon's configured `mode`.
     ///
     /// Returns [`BfdError::SessionExists`] if a session for this address is already active.
     pub async fn add_peer(&self, addr: SocketAddr) -> Result<(), BfdError> {
-        self.add_peer_with_mode(addr, None).await
-    }
-
-    /// Add a peer with an explicit mode, overriding `default_mode`.
-    ///
-    /// Pass `None` to use `default_mode`. Pass `Some(mode)` to set a per-peer
-    /// mode. `MultiHop { max_hops: 0 }` is rejected.
-    ///
-    /// Returns [`BfdError::SessionExists`] if a session already exists.
-    pub async fn add_peer_with_mode(&self, addr: SocketAddr, mode: Option<BfdMode>) -> Result<(), BfdError> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.cmd_tx
-            .send(Command::AddPeer { addr, mode, reply: reply_tx })
+            .send(Command::AddPeer { addr, reply: reply_tx })
             .await
             .ok();
         reply_rx.await.unwrap_or(Err(BfdError::Io(std::io::Error::other("daemon gone"))))
@@ -520,14 +513,8 @@ async fn handle_command(
         Some(Command::GetDaemonCounters { reply }) => {
             reply.send(*daemon_counters).ok();
         }
-        Some(Command::AddPeer { addr, mode, reply }) => {
+        Some(Command::AddPeer { addr, reply }) => {
             let result = if let std::collections::hash_map::Entry::Vacant(e) = sessions.entry(addr) {
-                let peer_mode = mode.unwrap_or(config.default_mode);
-                if let BfdMode::MultiHop { max_hops } = peer_mode
-                    && max_hops == 0 {
-                        reply.send(Err(BfdError::InvalidConfig("max_hops must be non-zero in MultiHop mode"))).ok();
-                        return false;
-                    }
                 let disc = match next_discriminator(disc_map) {
                     Some(d) => d,
                     None => {
@@ -542,7 +529,6 @@ async fn handle_command(
                     config.desired_min_tx_interval_us,
                     config.required_min_rx_interval_us,
                     config.detect_mult,
-                    peer_mode,
                     echo_configured,
                     config.desired_min_echo_tx_interval_us.unwrap_or(0),
                     config.required_min_echo_rx_interval_us,
@@ -550,7 +536,7 @@ async fn handle_command(
                 );
                 disc_map.insert(disc, addr);
                 e.insert(session);
-                info!("Added peer {addr} (mode={peer_mode:?}) with discriminator {disc}");
+                info!("Added peer {addr} (mode={:?}) with discriminator {disc}", config.mode);
                 daemon_counters.peers_added += 1;
                 Ok(())
             } else {
@@ -697,6 +683,7 @@ async fn run_event_loop(
                             &recv_buf[..len],
                             src,
                             ttl,
+                            config.mode.min_ttl(),
                         ).await;
                     }
                     Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
@@ -797,6 +784,7 @@ async fn handle_rx(
     buf: &[u8],
     src: SocketAddr,
     ttl: Option<u8>,
+    min_ttl: u8,
 ) {
     let pkt = match crate::packet::BfdPacket::decode(buf) {
         Ok(p) => p,
@@ -863,8 +851,7 @@ async fn handle_rx(
         }
     };
 
-    // Per-session TTL validation (RFC 5881 §5 / RFC 5883)
-    let min_ttl = session.min_ttl();
+    // TTL validation (RFC 5881 §5 / RFC 5883): daemon-wide minimum TTL from config.mode
     if ttl.is_none_or(|t| t < min_ttl) {
         warn!("Dropping BFD packet from {src}: TTL/hop-limit={ttl:?}, minimum required={min_ttl}");
         session.counters.control_rx_error += 1;
@@ -899,12 +886,7 @@ mod tests {
 
     #[test]
     fn ttl_validation_single_hop() {
-        use crate::session::BfdSession;
-        let session = BfdSession::new(
-            "127.0.0.1:3784".parse().unwrap(), 1, 1_000_000, 1_000_000, 3,
-            BfdMode::SingleHop, false, 0, 0, 1_000_000,
-        );
-        let min_ttl = session.min_ttl();
+        let min_ttl = BfdMode::SingleHop.min_ttl();
         assert_eq!(min_ttl, 255);
         assert!(Some(255u8).is_some_and(|t| t >= min_ttl));
         assert!(Some(254u8).is_none_or(|t| t < min_ttl));
@@ -913,12 +895,7 @@ mod tests {
 
     #[test]
     fn ttl_validation_multihop() {
-        use crate::session::BfdSession;
-        let session = BfdSession::new(
-            "127.0.0.1:4784".parse().unwrap(), 1, 1_000_000, 1_000_000, 3,
-            BfdMode::MultiHop { max_hops: 2 }, false, 0, 0, 1_000_000,
-        );
-        let min_ttl = session.min_ttl();
+        let min_ttl = BfdMode::MultiHop { max_hops: 2 }.min_ttl();
         assert_eq!(min_ttl, 253);
         assert!(Some(255u8).is_some_and(|t| t >= min_ttl));
         assert!(Some(254u8).is_some_and(|t| t >= min_ttl));
@@ -933,7 +910,7 @@ mod tests {
             desired_min_tx_interval_us: 1_000_000,
             required_min_rx_interval_us: 1_000_000,
             detect_mult: 3,
-            default_mode: BfdMode::MultiHop { max_hops: 0 },
+            mode: BfdMode::MultiHop { max_hops: 0 },
             ..Default::default()
         };
         let result = BfdDaemon::start(config).await;
@@ -941,22 +918,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn add_peer_with_mode_rejects_zero_hops() {
+    async fn echo_config_rejected_for_multihop() {
         let config = BfdConfig {
             listen_addr: "127.0.0.1:0".parse().unwrap(),
-            desired_min_tx_interval_us: 1_000_000,
-            required_min_rx_interval_us: 1_000_000,
-            detect_mult: 3,
-            default_mode: BfdMode::SingleHop,
+            mode: BfdMode::MultiHop { max_hops: 3 },
+            desired_min_echo_tx_interval_us: Some(100_000),
             ..Default::default()
         };
-        let daemon = BfdDaemon::start(config).await.unwrap();
-        let result = daemon.add_peer_with_mode(
-            "127.0.0.1:3784".parse().unwrap(),
-            Some(BfdMode::MultiHop { max_hops: 0 }),
-        ).await;
+        let result = BfdDaemon::start(config).await;
         assert!(matches!(result, Err(BfdError::InvalidConfig(_))));
-        daemon.shutdown().await;
     }
 
     #[tokio::test]

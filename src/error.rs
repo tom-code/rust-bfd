@@ -55,7 +55,7 @@ pub enum BfdError {
     /// Attempted to add a peer that already has an active session.
     #[error("session already exists for peer {0}")]
     SessionExists(std::net::SocketAddr),
-    /// A [`BfdConfig`](crate::BfdConfig) or `add_peer_with_mode` argument is invalid.
+    /// A [`BfdConfig`](crate::BfdConfig) argument is invalid.
     #[error("invalid configuration: {0}")]
     InvalidConfig(&'static str),
     /// A Poll sequence is already in progress for the session; only one at a time is allowed.

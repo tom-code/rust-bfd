@@ -67,7 +67,7 @@ Starts the async event loop and binds the UDP socket. Returns a `BfdDaemon` hand
 | `desired_min_tx_interval_us` | `u32` | Desired TX interval in microseconds (must be > 0) |
 | `required_min_rx_interval_us` | `u32` | Minimum acceptable RX interval in microseconds (must be > 0) |
 | `detect_mult` | `u8` | Detection multiplier (must be > 0) |
-| `default_mode` | `BfdMode` | Default mode for `add_peer()` (default: `SingleHop`) |
+| `mode` | `BfdMode` | Operating mode for all peers (default: `SingleHop`) |
 | `desired_min_echo_tx_interval_us` | `Option<u32>` | Echo TX interval; `None` disables echo TX |
 | `required_min_echo_rx_interval_us` | `u32` | Echo RX interval advertised to peers; `0` = won't loop back |
 | `echo_slow_timer_us` | `u32` | Control TX interval when echo is active (default: 1,000,000 μs) |
@@ -78,7 +78,6 @@ Starts the async event loop and binds the UDP socket. Returns a `BfdDaemon` hand
 ```rust
 // Peer management
 daemon.add_peer(addr: SocketAddr).await?;
-daemon.add_peer_with_mode(addr: SocketAddr, mode: Option<BfdMode>).await?;
 daemon.remove_peer(addr: SocketAddr).await?;
 
 // State queries
@@ -138,7 +137,7 @@ BfdMode::SingleHop                         // RFC 5881 — TTL must be 255
 BfdMode::MultiHop { max_hops: u8 }         // RFC 5883 — TTL must be ≥ 255 - max_hops
 ```
 
-A single daemon can have a mix of single-hop and multi-hop peers.
+Mode is set once at daemon startup and applies to all peers. To run both single-hop and multi-hop sessions, start two separate `BfdDaemon` instances.
 
 ### `BfdState`
 
@@ -192,24 +191,11 @@ let daemon = BfdDaemon::start(BfdConfig {
     desired_min_tx_interval_us: 1_000_000,
     required_min_rx_interval_us: 1_000_000,
     detect_mult: 3,
-    default_mode: BfdMode::MultiHop { max_hops: 10 },
+    mode: BfdMode::MultiHop { max_hops: 10 },
     ..Default::default()
 }).await?;
 
 daemon.add_peer("10.0.0.1:4784".parse()?).await?;
-```
-
-Per-peer mode override:
-
-```rust
-// Most peers are single-hop (default)
-daemon.add_peer("192.0.2.1:3784".parse()?).await?;
-
-// This peer is multi-hop
-daemon.add_peer_with_mode(
-    "10.0.0.1:4784".parse()?,
-    Some(BfdMode::MultiHop { max_hops: 5 }),
-).await?;
 ```
 
 ## State Machine

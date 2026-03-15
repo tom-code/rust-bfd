@@ -128,7 +128,7 @@ async fn main() -> anyhow::Result<()> {
         desired_min_tx_interval_us: tx_us,
         required_min_rx_interval_us: rx_us,
         detect_mult: args.detect_mult,
-        default_mode: args.mode.0,
+        mode: args.mode.0,
         desired_min_echo_tx_interval_us: echo_tx_us,
         required_min_echo_rx_interval_us: echo_rx_us,
         echo_slow_timer_us: echo_slow_us,

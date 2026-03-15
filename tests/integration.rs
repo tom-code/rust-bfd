@@ -17,7 +17,7 @@ fn default_config(addr: &str) -> BfdConfig {
         desired_min_tx_interval_us: 100_000,  // 100 ms
         required_min_rx_interval_us: 100_000, // 100 ms
         detect_mult: 3,
-        default_mode: BfdMode::SingleHop,
+        mode: BfdMode::SingleHop,
         ..Default::default()
     }
 }
@@ -28,7 +28,7 @@ fn echo_config(addr: &str) -> BfdConfig {
         desired_min_tx_interval_us: 100_000,
         required_min_rx_interval_us: 100_000,
         detect_mult: 3,
-        default_mode: BfdMode::SingleHop,
+        mode: BfdMode::SingleHop,
         desired_min_echo_tx_interval_us: Some(100_000),
         required_min_echo_rx_interval_us: 100_000,
         echo_slow_timer_us: 1_000_000,

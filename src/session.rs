@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use crate::packet::BfdPacket;
-use crate::state::{BfdMode, BfdState, Diagnostic, StateChange};
+use crate::state::{BfdState, Diagnostic, StateChange};
 
 /// Operational counters for a single BFD session.
 ///
@@ -54,8 +54,6 @@ pub struct BfdSession {
     pub remote_state: BfdState,
     /// Local diagnostic code for the last state transition.
     pub local_diag: Diagnostic,
-    /// Operating mode (single-hop or multi-hop) governing TTL validation.
-    pub mode: BfdMode,
 
     // Timer configuration (microseconds)
     /// Local desired minimum TX interval, in microseconds.
@@ -136,7 +134,6 @@ impl BfdSession {
         desired_min_tx_us: u32,
         required_min_rx_us: u32,
         detect_mult: u8,
-        mode: BfdMode,
         echo_configured: bool,
         desired_min_echo_tx_us: u32,
         required_min_echo_rx_us: u32,
@@ -149,7 +146,6 @@ impl BfdSession {
             local_state: BfdState::Down,
             remote_state: BfdState::Down,
             local_diag: Diagnostic::NoDiagnostic,
-            mode,
             desired_min_tx_us,
             required_min_rx_us,
             detect_mult,
@@ -175,25 +171,16 @@ impl BfdSession {
         }
     }
 
-    /// Minimum TTL (IPv4) or hop-limit (IPv6) required on incoming packets.
-    ///
-    /// Returns 255 for single-hop sessions and 255 − `max_hops` for multi-hop sessions.
-    pub fn min_ttl(&self) -> u8 {
-        match self.mode {
-            BfdMode::SingleHop => 255,
-            BfdMode::MultiHop { max_hops } => 255u8.saturating_sub(max_hops),
-        }
-    }
-
     /// Returns `true` when echo mode is active for this session.
     ///
     /// All conditions must hold: echo TX is configured locally, the session is Up,
-    /// the mode is SingleHop (RFC 5881), and the remote has advertised a non-zero
-    /// `required_min_echo_rx_interval` (i.e., it is willing to loop back echo packets).
+    /// and the remote has advertised a non-zero `required_min_echo_rx_interval`
+    /// (i.e., it is willing to loop back echo packets).
+    /// Echo is only supported for SingleHop daemons; MultiHop configurations are
+    /// rejected at daemon startup.
     pub fn echo_active(&self) -> bool {
         self.echo_configured
             && self.local_state == BfdState::Up
-            && self.mode == BfdMode::SingleHop
             && self.remote_min_echo_rx_us > 0
     }
 
@@ -662,7 +649,7 @@ impl BfdSession {
 mod tests {
     use super::*;
     use crate::packet::BfdPacket;
-    use crate::state::{BfdMode, BfdState, Diagnostic};
+    use crate::state::{BfdState, Diagnostic};
 
     fn make_session() -> BfdSession {
         BfdSession::new(
@@ -671,7 +658,6 @@ mod tests {
             250_000,
             250_000,
             3,
-            BfdMode::SingleHop,
             false,
             0,
             0,
@@ -686,7 +672,6 @@ mod tests {
             250_000,
             250_000,
             3,
-            BfdMode::SingleHop,
             true,        // echo_configured
             100_000,     // desired_min_echo_tx_us
             100_000,     // required_min_echo_rx_us
@@ -919,22 +904,22 @@ mod tests {
     }
 
     #[test]
-    fn echo_not_active_for_multihop() {
+    fn echo_not_active_without_echo_configured() {
+        // MultiHop daemons do not set echo_configured=true (validated at daemon startup).
+        // Verify that echo_active() returns false when echo is not configured.
         let mut s = BfdSession::new(
             "127.0.0.1:13785".parse().unwrap(),
             1,
             250_000,
             250_000,
             3,
-            BfdMode::MultiHop { max_hops: 3 },
-            true,
-            100_000,
-            100_000,
+            false, // echo_configured = false (as with any MultiHop daemon)
+            0,
+            0,
             1_000_000,
         );
         s.local_state = BfdState::Up;
         s.remote_min_echo_rx_us = 100_000;
-        // MultiHop never activates echo regardless of config
         assert!(!s.echo_active());
     }
 
@@ -1350,7 +1335,6 @@ mod tests {
             1_000_000,
             1_000_000,
             3,
-            BfdMode::SingleHop,
             false,
             0,
             0,
@@ -1376,7 +1360,6 @@ mod tests {
             1_000_000,
             1_000_000,
             1, // detect_mult = 1
-            BfdMode::SingleHop,
             false,
             0,
             0,
@@ -1402,7 +1385,6 @@ mod tests {
             1_000_000,
             1_000_000,
             3,
-            BfdMode::SingleHop,
             false,
             0,
             0,

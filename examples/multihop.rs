@@ -18,7 +18,7 @@ async fn main() -> anyhow::Result<()> {
         desired_min_tx_interval_us: 250_000,
         required_min_rx_interval_us: 250_000,
         detect_mult: 3,
-        default_mode: BfdMode::MultiHop { max_hops: 5 },
+        mode: BfdMode::MultiHop { max_hops: 5 },
         ..Default::default()
     };
 
@@ -27,7 +27,7 @@ async fn main() -> anyhow::Result<()> {
         desired_min_tx_interval_us: 250_000,
         required_min_rx_interval_us: 250_000,
         detect_mult: 3,
-        default_mode: BfdMode::MultiHop { max_hops: 5 },
+        mode: BfdMode::MultiHop { max_hops: 5 },
         ..Default::default()
     };
 

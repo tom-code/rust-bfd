@@ -77,11 +77,11 @@ impl From<u8> for Diagnostic {
     }
 }
 
-/// Per-peer operating mode, determining which RFC governs TTL validation.
+/// Daemon-wide operating mode, determining which RFC governs TTL validation.
 ///
-/// A single daemon can mix single-hop and multi-hop peers. The mode is set
-/// when a peer is added and controls how strictly incoming TTL values are
-/// checked.
+/// The mode is set once at daemon startup via [`BfdConfig::mode`] and applies
+/// to all peers. Users needing both single-hop and multi-hop sessions run two
+/// separate [`BfdDaemon`](crate::BfdDaemon) instances.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[derive(Default)]
 pub enum BfdMode {
@@ -96,6 +96,19 @@ pub enum BfdMode {
     /// `max_hops` is the maximum number of IP hops to the peer. Incoming
     /// packets must arrive with TTL ≥ 255 − `max_hops`. Must be ≥ 1.
     MultiHop { max_hops: u8 },
+}
+
+impl BfdMode {
+    /// Minimum TTL (IPv4) or hop-limit (IPv6) required on incoming control packets.
+    ///
+    /// Returns `255` for [`BfdMode::SingleHop`] and `255 − max_hops` for
+    /// [`BfdMode::MultiHop`].
+    pub fn min_ttl(self) -> u8 {
+        match self {
+            BfdMode::SingleHop => 255,
+            BfdMode::MultiHop { max_hops } => 255u8.saturating_sub(max_hops),
+        }
+    }
 }
 
 
