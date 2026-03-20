@@ -1,5 +1,7 @@
 # rust-bfd
 
+![AI](https://img.shields.io/badge/note-fully_generated_by_ai-blue.svg)
+
 A Rust library implementing **Bidirectional Forwarding Detection (BFD)** per [RFC 5880](https://www.rfc-editor.org/rfc/rfc5880), [RFC 5881](https://www.rfc-editor.org/rfc/rfc5881), and [RFC 5883](https://www.rfc-editor.org/rfc/rfc5883). Designed for link state detection in routing daemons and network appliances.
 
 ## Features
